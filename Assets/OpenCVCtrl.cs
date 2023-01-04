@@ -21,7 +21,10 @@ public class OpenCVCtrl : MonoBehaviour
     [SerializeField] RawImage _webCam = null;
     [SerializeField] Image _write = null;
     [SerializeField] GameObject _moji = null;
+    [SerializeField] GameObject _rectangle = null;
+    [SerializeField] PolygonCollider2D _col = null;
 
+    
     [SerializeField] YoloV4Tiny.ResourceSet _resources = null;
     [SerializeField, Range(0, 1)] float _threshold = 0.5f;
 
@@ -39,6 +42,8 @@ public class OpenCVCtrl : MonoBehaviour
 
     QRCodeDetector detector;
 
+    List<LineRenderer> _rects = new List<LineRenderer>();
+
     Color32[] colors;
     Texture2D texture;
     Texture2D texture2;
@@ -54,6 +59,8 @@ public class OpenCVCtrl : MonoBehaviour
     bool isInitWaiting = false;
     bool hasInitDone = false;
 
+    public bool isPrepare => !_image.enabled;
+
     void Start()
     {
         detector = new QRCodeDetector();
@@ -64,6 +71,8 @@ public class OpenCVCtrl : MonoBehaviour
         }
 
         _detector = new ObjectDetector(_resources);
+
+        //_rects.Concat(_rectangle02.GetComponentsInChildren<LineRenderer>());
 
         CreateMarker();
         Initialize();
@@ -653,6 +662,108 @@ public class OpenCVCtrl : MonoBehaviour
         Utils.matToTexture2D(rgbMat, texture2);
     }
 
+    void DetectHumanShadow()
+    {
+        Mat _rgbaMat = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
+        Core.flip(rgbaMat, _rgbaMat, 0);
+        Imgproc.GaussianBlur(_rgbaMat, _rgbaMat, new Size(7, 7), 0);
+
+        /*
+        //肌色だけ取る作戦
+        Scalar SKIN_LOWER1 = new Scalar(0, 30, 88); //H（0~180）の左側  
+        Scalar SKIN_UPPER1 = new Scalar(25, 173, 255);
+        Scalar SKIN_LOWER2 = new Scalar(160, 30, 88); //H（0~180）の右側
+        Scalar SKIN_UPPER2 = new Scalar(180, 173, 255);
+        Scalar HAIR_LOWER = new Scalar(0, 0, 0);
+        Scalar HAIR_UPPER = new Scalar(255, 150, 90);
+
+        //Utils.webCamTextureToMat(webCamTexture, rgbaMat, colors);
+        Mat hsv = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
+        Mat skinMask1 = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
+        Mat skinMask2 = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
+        Imgproc.cvtColor(_rgbaMat, hsv, Imgproc.COLOR_RGB2HSV);
+        Core.inRange(hsv, SKIN_LOWER1, SKIN_UPPER1, skinMask1);
+        Core.inRange(hsv, SKIN_LOWER2, SKIN_UPPER2, skinMask2);
+        Core.bitwise_or(skinMask1, skinMask2, skinMask1);
+        Core.bitwise_and(hsv, skinMask1, hsv);
+        Mat work = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
+        Imgproc.cvtColor(hsv, work, Imgproc.COLOR_HSV2RGB);
+        Imgproc.cvtColor(work, work, Imgproc.COLOR_RGB2GRAY);
+        Core.bitwise_not(work, work); // 白黒の反転
+        Imgproc.threshold(work, work, 128, 255, Imgproc.THRESH_BINARY);
+        */
+
+        Mat work = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
+
+
+        // 輪郭の抽出
+        List<MatOfPoint> contours = new List<MatOfPoint>();
+        List<MatOfPoint> tmpContours = new List<MatOfPoint>();
+        Mat hierarchy = new Mat();
+        Imgproc.findContours(work, tmpContours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_TC89_L1);
+
+        if (tmpContours.Count < 1000)
+        {
+            //輪郭の近似
+            foreach (var cnt in tmpContours)
+            {
+                MatOfInt hull = new MatOfInt();
+                Imgproc.convexHull(cnt, hull, false);
+
+                Point[] cntArr = cnt.toArray();
+                int[] hullArr = hull.toArray();
+                Point[] pts = new Point[hullArr.Length];
+                for (int i = 0; i < hullArr.Length; ++i)
+                {
+                    pts[i] = cntArr[hullArr[i]];
+                }
+
+                MatOfPoint2f ptsFC2 = new MatOfPoint2f(pts);
+                MatOfPoint2f approxFC2 = new MatOfPoint2f();
+                MatOfPoint approxSC2 = new MatOfPoint();
+
+                double arcLen = Imgproc.arcLength(ptsFC2, true);
+                Imgproc.approxPolyDP(ptsFC2, approxFC2, 0.02 * arcLen, true);
+                approxFC2.convertTo(approxSC2, CvType.CV_32S);
+
+                if (approxSC2.size().area() >= 5) continue;
+
+                contours.Add(approxSC2);
+            }
+
+            Debug.Log($"tmpContours{tmpContours.Count} contours{contours.Count}");
+            // 輪郭の表示
+            for (int i = 0; i < contours.Count; ++i)
+            {
+                Imgproc.drawContours(_rgbaMat, contours, i, new Scalar(0, 255, 0), 2, Imgproc.LINE_8, hierarchy, 0, new Point());
+            }
+        }
+
+        Utils.matToTexture2D(_rgbaMat, texture2);
+        Utils.matToTexture2D(work, texture3);
+        _fimage.texture = texture3;
+    }
+
+    void CreateHitRect()
+    {
+        _rects = _rectangle.GetComponentsInChildren<LineRenderer>().ToList();
+        foreach (var ren in _rects)
+        {
+            if (!ren.gameObject.activeInHierarchy) continue;
+
+            Vector3[] vecs = new Vector3[ren.positionCount];
+            Vector2[] vec2ds = new Vector2[ren.positionCount];
+            int num = ren.GetPositions(vecs);
+            for(int i=0; i<num; ++i)
+            {
+                vec2ds[i].x = vecs[i].x / (1920 / 2) * 10;
+                vec2ds[i].y = vecs[i].y / (1080 / 2) * 10;
+            }
+            
+            _col.points = vec2ds;
+            break;
+        }
+    }
 
     void Update()
     {
@@ -662,11 +773,16 @@ public class OpenCVCtrl : MonoBehaviour
         if (hasInitDone && webCamTexture.isPlaying && webCamTexture.didUpdateThisFrame)
         {
             Utils.webCamTextureToMat(webCamTexture, rgbaMat, colors);
+            //Core.flip(rgbaMat, rgbaMat, 0);
+            //Utils.matToTexture2D(rgbaMat, texture3, colors);
 
-            if (firstSceneCaptureTexture == null)
+            if (_image.enabled)
             {
                 Utils.matToTexture2D(rgbaMat, texture, colors);
-                DetectSceneMarkers();
+                if(DetectSceneMarkers())
+                {
+                    _image.enabled = false;
+                }
             }
             else
             {
@@ -687,7 +803,9 @@ public class OpenCVCtrl : MonoBehaviour
                 }
                 */
 
-                DetectMarkerAndDrawString();
+                //DetectHumanShadow();
+                //DetectMarkerAndDrawString();
+                CreateHitRect();
             }
         }
     }
@@ -740,5 +858,10 @@ public class OpenCVCtrl : MonoBehaviour
         ARM = obj.transform.localToWorldMatrix * ARM.inverse;
         ARUtils.SetTransformFromMatrix(obj.transform, ref ARM);
         obj.transform.Rotate(180,0,0);
+    }
+
+    public Texture GetScreenTexture()
+    {
+        return texture;
     }
 }
