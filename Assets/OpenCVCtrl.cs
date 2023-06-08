@@ -10,7 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
-using YoloV4Tiny;
+//using YoloV4Tiny;
 
 public class OpenCVCtrl : MonoBehaviour
 {
@@ -24,37 +24,42 @@ public class OpenCVCtrl : MonoBehaviour
     [SerializeField] GameObject _rectangle = null;
     [SerializeField] PolygonCollider2D _col = null;
 
-    
     [SerializeField] YoloV4Tiny.ResourceSet _resources = null;
     [SerializeField, Range(0, 1)] float _threshold = 0.5f;
 
-    List<Mat> straightQrcode;
+    ////////////////////////////////////////////////
+    //カメラ回り
     [SerializeField] string requestedDeviceName = null;
     public int requestedWidth = 640;
     public int requestedHeight = 480;
-
     public int requestedFPS = 30;
 
     WebCamTexture webCamTexture;
     WebCamDevice webCamDevice;
+    //////////////////////////////////////////////////
 
     Mat rgbaMat;
 
+    List<Mat> straightQrcode;
     QRCodeDetector detector;
-
-    List<LineRenderer> _rects = new List<LineRenderer>();
 
     Color32[] colors;
     Texture2D texture;
     Texture2D texture2;
     Texture2D texture3;
 
+    //スクリーン検知用のArucoボード
     Mat firstSceneCaptureMat;
     Texture2D firstSceneCaptureTexture = null;
     Texture2D charucoBoardTexture;
     CharucoBoard charucoBoard;
 
-    ObjectDetector _detector;
+    //YOLOの検知系(全然検知できなかったので外してある)
+    //ObjectDetector _detector;
+
+    [SerializeField] bool[] setString = new bool[4];
+    [SerializeField] int[] setIds = new int[4];
+    [SerializeField] string[] setValue = new string[4];
 
     bool isInitWaiting = false;
     bool hasInitDone = false;
@@ -63,16 +68,18 @@ public class OpenCVCtrl : MonoBehaviour
 
     void Start()
     {
+        //QR
         detector = new QRCodeDetector();
 
+        //ディスプレイを活性化
+        //2枚目のモニタにプロジェクタをつないで投影するため
         for (int i = 1; i < Display.displays.Length; i++)
         {
             Display.displays[i].Activate();
         }
 
-        _detector = new ObjectDetector(_resources);
-
-        //_rects.Concat(_rectangle02.GetComponentsInChildren<LineRenderer>());
+        //YOLO
+        //_detector = new ObjectDetector(_resources);
 
         CreateMarker();
         Initialize();
@@ -89,25 +96,7 @@ public class OpenCVCtrl : MonoBehaviour
         StartCoroutine(_Initialize());
     }
 
-    void CreateMarker()
-    {
-        // create dictinary.
-        Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_6X6_250);
-
-        const int borderBits = 1;
-        const int chArUcoBoradMarginSize = 10;
-        const int markerSize = 1000;
-        const float chArUcoBoradSquareLength = 0.04f;
-        const float chArUcoBoradMarkerLength = 0.02f;
-
-        Mat markerImg = new Mat(markerSize, markerSize, CvType.CV_8UC3);
-        charucoBoardTexture = new Texture2D(markerImg.cols(), markerImg.rows(), TextureFormat.RGB24, false);
-        charucoBoard = CharucoBoard.create(5, 5, chArUcoBoradSquareLength, chArUcoBoradMarkerLength, dictionary);
-        charucoBoard.draw(new Size(markerSize, markerSize), markerImg, chArUcoBoradMarginSize, borderBits);
-        //charucoBoard.Dispose();
-        Utils.matToTexture2D(markerImg, charucoBoardTexture, true, 0, true);
-    }
-
+#region 初期化と解放
     /// <summary>
     /// Initializes webcam texture by coroutine.
     /// </summary>
@@ -273,6 +262,9 @@ public class OpenCVCtrl : MonoBehaviour
         }
     }
 
+    #endregion
+
+#region Aruco
     class ArucoIdPos
     {
         public int Id;
@@ -281,9 +273,36 @@ public class OpenCVCtrl : MonoBehaviour
     };
     Mat rgbMat;
     Mat rMat;
+
+    /// <summary>
+    /// ARucoボードを生成する
+    /// </summary>
+    void CreateMarker()
+    {
+        // create dictinary.
+        Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_6X6_250);
+
+        const int borderBits = 1;
+        const int chArUcoBoradMarginSize = 10;
+        const int markerSize = 1000;
+        const float chArUcoBoradSquareLength = 0.04f;
+        const float chArUcoBoradMarkerLength = 0.02f;
+
+        Mat markerImg = new Mat(markerSize, markerSize, CvType.CV_8UC3);
+        charucoBoardTexture = new Texture2D(markerImg.cols(), markerImg.rows(), TextureFormat.RGB24, false);
+        charucoBoard = CharucoBoard.create(5, 5, chArUcoBoradSquareLength, chArUcoBoradMarkerLength, dictionary);
+        charucoBoard.draw(new Size(markerSize, markerSize), markerImg, chArUcoBoradMarginSize, borderBits);
+        //charucoBoard.Dispose();
+        Utils.matToTexture2D(markerImg, charucoBoardTexture, true, 0, true);
+    }
+
+    /// <summary>
+    /// ゲーム画面となるArucoボードを検知して、スクリーンにする
+    /// </summary>
+    /// <returns></returns>
     bool DetectSceneMarkers()
     {
-        //AR�}�[�J�[�����o����
+        //ARマーカーを検出する
         bool isDetect = false;
         Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_6X6_250);
         Mat ids = new Mat();
@@ -385,7 +404,7 @@ public class OpenCVCtrl : MonoBehaviour
                         //Debug.Log($"id({i}):{charucoIds.get(i, 1).GetValue(0)}"); //, {charucoIds.get(i, 0).GetValue(2)}
                     }
 
-                    //Id��0,1,4,5�̃}�[�J�[��T���āA��ʂ̈ʒu����肷��
+                    //Idが0,1,4,5のマーカーを探して、画面の位置を特定する
                     var p0 = pos.Where(p => p.Id == 0).Single();
                     var p1 = pos.Where(p => p.Id == 1).Single();
                     var p4 = pos.Where(p => p.Id == 4).Single();
@@ -439,11 +458,17 @@ public class OpenCVCtrl : MonoBehaviour
         return isDetect;
     }
 
+    /// <summary>
+    /// Arucoマーカーの検知
+    /// NOTE: こっちはうまくいかなかった
+    /// </summary>
+    /// <param name="pos"></param>
+    /// <returns></returns>
     bool DetectMarker(out Vector2 pos)
     {
         pos = new Vector2(0,0);
 
-        //AR�}�[�J�[�����o����
+        //ARマーカーを検出する
         Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_4X4_50);
         Mat ids = new Mat();
         List<Mat> corners = new List<Mat>();
@@ -540,13 +565,45 @@ public class OpenCVCtrl : MonoBehaviour
         return false;
     }
 
+    /// <summary>
+    /// 座標変換
+    /// </summary>
+    /// <param name="rvec"></param>
+    /// <param name="tvec"></param>
+    /// <param name="obj"></param>
+    void UpdateARObjectTransform(Mat rvec, Mat tvec, GameObject obj)
+    {
+        // Convert to unity pose data.
+        double[] rvecArr = new double[3];
+        rvec.get(0, 0, rvecArr);
+        double[] tvecArr = new double[3];
+        tvec.get(0, 0, tvecArr);
+        PoseData poseData = ARUtils.ConvertRvecTvecToPoseData(rvecArr, tvecArr);
 
-    [SerializeField] bool[] setString = new bool[4];
-    [SerializeField] int[] setIds = new int[4];
-    [SerializeField] string[] setValue = new string[4];
+        // Changes in pos/rot below these thresholds are ignored.
+        //if (enableLowPassFilter)
+        //{
+        //    ARUtils.LowpassPoseData(ref oldPoseData, ref poseData, positionLowPass, rotationLowPass);
+        //}
+        //oldPoseData = poseData;
+
+        // Convert to transform matrix.
+        Matrix4x4 ARM;
+        ARM = ARUtils.ConvertPoseDataToMatrix(ref poseData, true);
+        ARM = obj.transform.localToWorldMatrix * ARM.inverse;
+        ARUtils.SetTransformFromMatrix(obj.transform, ref ARM);
+        obj.transform.Rotate(180, 0, 0);
+    }
+
+    /// <summary>
+    /// Arucoマーカーの検知
+    /// NOTE: こっちはうまくいく
+    /// </summary>
+    /// <param name="pos"></param>
+    /// <returns></returns>
     void DetectMarkerAndDrawString()
     {
-        //AR�}�[�J�[�����o����
+        //ARマーカーを検出する
         Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_4X4_50);
         Mat ids = new Mat();
         List<Mat> corners = new List<Mat>();
@@ -661,109 +718,7 @@ public class OpenCVCtrl : MonoBehaviour
 
         Utils.matToTexture2D(rgbMat, texture2);
     }
-
-    void DetectHumanShadow()
-    {
-        Mat _rgbaMat = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
-        Core.flip(rgbaMat, _rgbaMat, 0);
-        Imgproc.GaussianBlur(_rgbaMat, _rgbaMat, new Size(7, 7), 0);
-
-        /*
-        //���F���������
-        Scalar SKIN_LOWER1 = new Scalar(0, 30, 88); //H�i0~180�j�̍���  
-        Scalar SKIN_UPPER1 = new Scalar(25, 173, 255);
-        Scalar SKIN_LOWER2 = new Scalar(160, 30, 88); //H�i0~180�j�̉E��
-        Scalar SKIN_UPPER2 = new Scalar(180, 173, 255);
-        Scalar HAIR_LOWER = new Scalar(0, 0, 0);
-        Scalar HAIR_UPPER = new Scalar(255, 150, 90);
-
-        //Utils.webCamTextureToMat(webCamTexture, rgbaMat, colors);
-        Mat hsv = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
-        Mat skinMask1 = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
-        Mat skinMask2 = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
-        Imgproc.cvtColor(_rgbaMat, hsv, Imgproc.COLOR_RGB2HSV);
-        Core.inRange(hsv, SKIN_LOWER1, SKIN_UPPER1, skinMask1);
-        Core.inRange(hsv, SKIN_LOWER2, SKIN_UPPER2, skinMask2);
-        Core.bitwise_or(skinMask1, skinMask2, skinMask1);
-        Core.bitwise_and(hsv, skinMask1, hsv);
-        Mat work = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
-        Imgproc.cvtColor(hsv, work, Imgproc.COLOR_HSV2RGB);
-        Imgproc.cvtColor(work, work, Imgproc.COLOR_RGB2GRAY);
-        Core.bitwise_not(work, work); // �����̔��]
-        Imgproc.threshold(work, work, 128, 255, Imgproc.THRESH_BINARY);
-        */
-
-        Mat work = new Mat(rgbaMat.height(), rgbaMat.width(), CvType.CV_8UC3);
-
-
-        // �֊s�̒��o
-        List<MatOfPoint> contours = new List<MatOfPoint>();
-        List<MatOfPoint> tmpContours = new List<MatOfPoint>();
-        Mat hierarchy = new Mat();
-        Imgproc.findContours(work, tmpContours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_TC89_L1);
-
-        if (tmpContours.Count < 1000)
-        {
-            //�֊s�̋ߎ�
-            foreach (var cnt in tmpContours)
-            {
-                MatOfInt hull = new MatOfInt();
-                Imgproc.convexHull(cnt, hull, false);
-
-                Point[] cntArr = cnt.toArray();
-                int[] hullArr = hull.toArray();
-                Point[] pts = new Point[hullArr.Length];
-                for (int i = 0; i < hullArr.Length; ++i)
-                {
-                    pts[i] = cntArr[hullArr[i]];
-                }
-
-                MatOfPoint2f ptsFC2 = new MatOfPoint2f(pts);
-                MatOfPoint2f approxFC2 = new MatOfPoint2f();
-                MatOfPoint approxSC2 = new MatOfPoint();
-
-                double arcLen = Imgproc.arcLength(ptsFC2, true);
-                Imgproc.approxPolyDP(ptsFC2, approxFC2, 0.02 * arcLen, true);
-                approxFC2.convertTo(approxSC2, CvType.CV_32S);
-
-                if (approxSC2.size().area() >= 5) continue;
-
-                contours.Add(approxSC2);
-            }
-
-            Debug.Log($"tmpContours{tmpContours.Count} contours{contours.Count}");
-            // �֊s�̕\��
-            for (int i = 0; i < contours.Count; ++i)
-            {
-                Imgproc.drawContours(_rgbaMat, contours, i, new Scalar(0, 255, 0), 2, Imgproc.LINE_8, hierarchy, 0, new Point());
-            }
-        }
-
-        Utils.matToTexture2D(_rgbaMat, texture2);
-        Utils.matToTexture2D(work, texture3);
-        _fimage.texture = texture3;
-    }
-
-    void CreateHitRect()
-    {
-        _rects = _rectangle.GetComponentsInChildren<LineRenderer>().ToList();
-        foreach (var ren in _rects)
-        {
-            if (!ren.gameObject.activeInHierarchy) continue;
-
-            Vector3[] vecs = new Vector3[ren.positionCount];
-            Vector2[] vec2ds = new Vector2[ren.positionCount];
-            int num = ren.GetPositions(vecs);
-            for(int i=0; i<num; ++i)
-            {
-                vec2ds[i].x = vecs[i].x / (1920 / 2) * 10;
-                vec2ds[i].y = vecs[i].y / (1080 / 2) * 10;
-            }
-            
-            _col.points = vec2ds;
-            break;
-        }
-    }
+#endregion
 
     void Update()
     {
@@ -778,6 +733,8 @@ public class OpenCVCtrl : MonoBehaviour
 
             if (_image.enabled)
             {
+                //シーンのArucoボードを検知する
+                //検知したらその座標でキャリブレーションする
                 Utils.matToTexture2D(rgbaMat, texture, colors);
                 if(DetectSceneMarkers())
                 {
@@ -804,8 +761,7 @@ public class OpenCVCtrl : MonoBehaviour
                 */
 
                 //DetectHumanShadow();
-                //DetectMarkerAndDrawString();
-                CreateHitRect();
+                DetectMarkerAndDrawString();
             }
         }
     }
@@ -834,30 +790,6 @@ public class OpenCVCtrl : MonoBehaviour
     {
         if (hasInitDone)
             webCamTexture.Stop();
-    }
-
-    void UpdateARObjectTransform(Mat rvec, Mat tvec, GameObject obj)
-    {
-        // Convert to unity pose data.
-        double[] rvecArr = new double[3];
-        rvec.get(0, 0, rvecArr);
-        double[] tvecArr = new double[3];
-        tvec.get(0, 0, tvecArr);
-        PoseData poseData = ARUtils.ConvertRvecTvecToPoseData(rvecArr, tvecArr);
-
-        // Changes in pos/rot below these thresholds are ignored.
-        //if (enableLowPassFilter)
-        //{
-        //    ARUtils.LowpassPoseData(ref oldPoseData, ref poseData, positionLowPass, rotationLowPass);
-        //}
-        //oldPoseData = poseData;
-
-        // Convert to transform matrix.
-        Matrix4x4 ARM;
-        ARM = ARUtils.ConvertPoseDataToMatrix(ref poseData, true);
-        ARM = obj.transform.localToWorldMatrix * ARM.inverse;
-        ARUtils.SetTransformFromMatrix(obj.transform, ref ARM);
-        obj.transform.Rotate(180,0,0);
     }
 
     public Texture GetScreenTexture()
