@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
+using static OpenCVForUnityExample.ArUcoExample;
 //using YoloV4Tiny;
 
 public class OpenCVCtrl : MonoBehaviour
@@ -24,7 +25,7 @@ public class OpenCVCtrl : MonoBehaviour
     [SerializeField] GameObject _rectangle = null;
     [SerializeField] PolygonCollider2D _col = null;
 
-    [SerializeField] YoloV4Tiny.ResourceSet _resources = null;
+    //[SerializeField] YoloV4Tiny.ResourceSet _resources = null;
     [SerializeField, Range(0, 1)] float _threshold = 0.5f;
 
     ////////////////////////////////////////////////
@@ -273,6 +274,10 @@ public class OpenCVCtrl : MonoBehaviour
     };
     Mat rgbMat;
     Mat rMat;
+    Mat _undistortedRgbMat;
+
+    CharucoDetector _charucoDetector;
+    ArucoDetector _arucoDetector = null;
 
     /// <summary>
     /// ARucoボードを生成する
@@ -280,7 +285,7 @@ public class OpenCVCtrl : MonoBehaviour
     void CreateMarker()
     {
         // create dictinary.
-        Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_6X6_250);
+        Dictionary dictionary = Objdetect.getPredefinedDictionary((int)ArUcoDictionary.DICT_6X6_250);
 
         const int borderBits = 1;
         const int chArUcoBoradMarginSize = 10;
@@ -290,10 +295,28 @@ public class OpenCVCtrl : MonoBehaviour
 
         Mat markerImg = new Mat(markerSize, markerSize, CvType.CV_8UC3);
         charucoBoardTexture = new Texture2D(markerImg.cols(), markerImg.rows(), TextureFormat.RGB24, false);
-        charucoBoard = CharucoBoard.create(5, 5, chArUcoBoradSquareLength, chArUcoBoradMarkerLength, dictionary);
-        charucoBoard.draw(new Size(markerSize, markerSize), markerImg, chArUcoBoradMarginSize, borderBits);
+        charucoBoard = new CharucoBoard(new Size(5, 5), chArUcoBoradSquareLength, chArUcoBoradMarkerLength, dictionary);
+        charucoBoard.generateImage(new Size(markerSize, markerSize), markerImg, chArUcoBoradMarginSize, borderBits);
         //charucoBoard.Dispose();
         Utils.matToTexture2D(markerImg, charucoBoardTexture, true, 0, true);
+
+        DetectorParameters detectorParams = new DetectorParameters();
+        detectorParams.set_useAruco3Detection(true);
+        RefineParameters refineParameters = new RefineParameters(10f, 3f, true);
+        _arucoDetector = new ArucoDetector(dictionary, detectorParams, refineParameters);
+        _undistortedRgbMat = new Mat();
+
+        //Mat camMatrix = param.GetCameraMatrix();
+        //MatOfDouble distCoeffs = new MatOfDouble(param.GetDistortionCoefficients());
+
+        _charucoDetector = new CharucoDetector(charucoBoard);
+        CharucoParameters charucoParameters = _charucoDetector.getCharucoParameters();
+        //charucoParameters.set_cameraMatrix(camMatrix);
+        //charucoParameters.set_distCoeffs(distCoeffs);
+        //charucoParameters.set_minMarkers(charucoMinMarkers);
+        _charucoDetector.setCharucoParameters(charucoParameters);
+        _charucoDetector.setDetectorParameters(detectorParams);
+        _charucoDetector.setRefineParameters(refineParameters);
     }
 
     /// <summary>
@@ -302,14 +325,17 @@ public class OpenCVCtrl : MonoBehaviour
     /// <returns></returns>
     bool DetectSceneMarkers()
     {
+        Mat charucoCorners = new Mat();
+        Mat charucoIds = new Mat();
+
         //ARマーカーを検出する
         bool isDetect = false;
-        Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_6X6_250);
+        Dictionary dictionary = Objdetect.getPredefinedDictionary((int)ArUcoDictionary.DICT_6X6_250);
         Mat ids = new Mat();
         List<Mat> corners = new List<Mat>();
         List<Mat> rejectedCorners = new List<Mat>();
         Mat recoveredIdxs = new Mat();
-        DetectorParameters detectorParams = DetectorParameters.create();
+        DetectorParameters detectorParams = new DetectorParameters();
         rgbMat = new Mat(webCamTexture.height, webCamTexture.width, CvType.CV_8UC3);
 
         float width = rgbMat.width();
@@ -354,91 +380,89 @@ public class OpenCVCtrl : MonoBehaviour
         Core.flip(rgbMat, rgbMat, 0);
         //Calib3d.undistort(rgbMat, rgbMat, camMatrix, distCoeffs);
 
-        Aruco.detectMarkers(rgbMat, dictionary, corners, ids, detectorParams, rejectedCorners);
-        Aruco.refineDetectedMarkers(rgbMat, charucoBoard, corners, ids, rejectedCorners, camMatrix, distCoeffs, 10f, 3f, true, recoveredIdxs, detectorParams);
+        Calib3d.undistort(rgbMat, _undistortedRgbMat, camMatrix, distCoeffs);
+        _arucoDetector.detectMarkers(_undistortedRgbMat, corners, ids, rejectedCorners);
+        Calib3d.undistort(rgbMat, _undistortedRgbMat, camMatrix, distCoeffs);
 
+        // If at least one marker detected
         if (ids.total() > 0)
         {
-            const int charucoMinMarkers = 2;
-            Mat charucoIds = new Mat();
-            Mat charucoCorners = new Mat();
-            const float markerLength = 0.1f;
-            Mat rvec = new Mat();
-            Mat tvec = new Mat();
+            //charucoDetector.detectBoard(undistortedRgbMat, charucoCorners, charucoIds, corners, ids); // error
+            _charucoDetector.detectBoard(_undistortedRgbMat, charucoCorners, charucoIds);
 
-            Aruco.interpolateCornersCharuco(corners, ids, rgbMat, charucoBoard, charucoCorners, charucoIds, camMatrix, distCoeffs, charucoMinMarkers);
+            Objdetect.drawDetectedMarkers(_undistortedRgbMat, corners, ids, new Scalar(0, 255, 0));
 
-            // draw markers.
-            Aruco.drawDetectedMarkers(rgbMat, corners, ids, new Scalar(0, 255, 0));
-            if (charucoIds.total() > 0)
-            {
-                Aruco.drawDetectedCornersCharuco(rgbMat, charucoCorners, charucoIds, new Scalar(0, 0, 255));
-            }
-            // estimate pose.
             // if at least one charuco corner detected
             if (charucoIds.total() > 0)
             {
-                bool valid = Aruco.estimatePoseCharucoBoard(charucoCorners, charucoIds, charucoBoard, camMatrix, distCoeffs, rvec, tvec);
+                Objdetect.drawDetectedCornersCharuco(_undistortedRgbMat, charucoCorners, charucoIds, new Scalar(0, 0, 255));
 
-                List<ArucoIdPos> pos = new List<ArucoIdPos>();
-                // if at least one board marker detected
-                if (valid)
+                Debug.Log("detected a");
+//                if (applyEstimationPose)
+//                    EstimatePoseChArUcoBoard(undistortedRgbMat);
+            }
+
+            // estimate pose.
+            List<ArucoIdPos> pos = new List<ArucoIdPos>();
+            // if at least one board marker detected
+            if(charucoIds.total() > 0)
+            {
+                Debug.Log("detected b");
+
+                // In this example we are processing with RGB color image, so Axis-color correspondences are X: blue, Y: green, Z: red. (Usually X: red, Y: green, Z: blue)
+                //Calib3d.drawFrameAxes(rgbMat, camMatrix, distCoeffs, rvec, tvec, markerLength * 0.5f);
+
+                //UpdateARObjectTransform(rvec, tvec);
+
+                Debug.Log($"ids.total():{ids.total()} / charucoIds.total(){charucoIds.total()}");
+
+                for (int i = 0; i < charucoIds.total(); ++i)
                 {
-                    // In this example we are processing with RGB color image, so Axis-color correspondences are X: blue, Y: green, Z: red. (Usually X: red, Y: green, Z: blue)
-                    Calib3d.drawFrameAxes(rgbMat, camMatrix, distCoeffs, rvec, tvec, markerLength * 0.5f);
-
-                    //UpdateARObjectTransform(rvec, tvec);
-
-                    Debug.Log($"ids.total():{ids.total()} / charucoIds.total(){charucoIds.total()}");
-
-                    for (int i = 0; i < charucoIds.total(); ++i)
+                    pos.Add(new ArucoIdPos()
                     {
-                        pos.Add(new ArucoIdPos()
-                        {
-                            Id = (int)charucoIds.get(i, 0)[0],
-                            PosX = charucoCorners.get(i, 0)[0],
-                            PosY = charucoCorners.get(i, 0)[1]
-                        });
-                        Debug.Log($"id({i}):{String.Join(",", charucoIds.get(i, 0))}");
-                        Debug.Log($"id({i}):{String.Join(",", charucoCorners.get(i, 0))}");
-                        //Debug.Log($"id({i}):{charucoIds.get(i, 1).GetValue(0)}"); //, {charucoIds.get(i, 0).GetValue(2)}
-                    }
-
-                    //Idが0,1,4,5のマーカーを探して、画面の位置を特定する
-                    var p0 = pos.Where(p => p.Id == 0).Single();
-                    var p1 = pos.Where(p => p.Id == 1).Single();
-                    var p4 = pos.Where(p => p.Id == 4).Single();
-                    var p5 = pos.Where(p => p.Id == 5).Single();
-
-                    if (p0 == null || p1 == null || p4 == null || p5 == null) return false;
-
-                    float xSub = (float)(p1.PosX - p0.PosX);
-                    float ySub = (float)(p4.PosY - p0.PosY);
-                    float x1 = (float)p0.PosX - xSub;
-                    float x2 = (float)p1.PosX + xSub * 3;
-                    float y1 = (float)p0.PosY - ySub;
-                    float y2 = (float)p4.PosY + ySub * 3;
-                    float w = (float)rgbMat.width();//xSub * 5; // 
-                    float h = (float)rgbMat.height();//ySub * 5; // 
-
-                    Mat srcPointMat = new Mat(4, 2, CvType.CV_32F);
-                    float[] srcPoints = new float[] { x1, y1, x2, y1, x1, y2, x2, y2 };
-                    srcPointMat.put(0, 0, srcPoints);
-
-                    Mat dstPointMat = new Mat(4, 2, CvType.CV_32F);
-                    float[] dstPoints = new float[] { 0.0f, 0.0f, w, 0.0f, 0.0f, h, w, h };
-                    dstPointMat.put(0, 0, dstPoints);
-
-                    Size s = new Size();
-                    s.width = w;
-                    s.height = h;
-                    Debug.Log($"({x1},{y1})({x2},{y2}) {rgbMat.width()}, {rgbMat.height()}, {rgbMat.size()}");
-                    rMat = Imgproc.getPerspectiveTransform(srcPointMat, dstPointMat);
-                    Imgproc.warpPerspective(rgbMat, firstSceneCaptureMat, rMat, s);
-
-                    _image.texture = texture;
-                    isDetect = true;
+                        Id = (int)charucoIds.get(i, 0)[0],
+                        PosX = charucoCorners.get(i, 0)[0],
+                        PosY = charucoCorners.get(i, 0)[1]
+                    });
+                    Debug.Log($"id({i}):{String.Join(",", charucoIds.get(i, 0))}");
+                    Debug.Log($"id({i}):{String.Join(",", charucoCorners.get(i, 0))}");
+                    //Debug.Log($"id({i}):{charucoIds.get(i, 1).GetValue(0)}"); //, {charucoIds.get(i, 0).GetValue(2)}
                 }
+
+                //Idが0,1,4,5のマーカーを探して、画面の位置を特定する
+                var p0 = pos.Where(p => p.Id == 0).Single();
+                var p1 = pos.Where(p => p.Id == 1).Single();
+                var p4 = pos.Where(p => p.Id == 4).Single();
+                var p5 = pos.Where(p => p.Id == 5).Single();
+
+                if (p0 == null || p1 == null || p4 == null || p5 == null) return false;
+
+                float xSub = (float)(p1.PosX - p0.PosX);
+                float ySub = (float)(p4.PosY - p0.PosY);
+                float x1 = (float)p0.PosX - xSub;
+                float x2 = (float)p1.PosX + xSub * 3;
+                float y1 = (float)p0.PosY - ySub;
+                float y2 = (float)p4.PosY + ySub * 3;
+                float w = (float)rgbMat.width();//xSub * 5; // 
+                float h = (float)rgbMat.height();//ySub * 5; // 
+
+                Mat srcPointMat = new Mat(4, 2, CvType.CV_32F);
+                float[] srcPoints = new float[] { x1, y1, x2, y1, x1, y2, x2, y2 };
+                srcPointMat.put(0, 0, srcPoints);
+
+                Mat dstPointMat = new Mat(4, 2, CvType.CV_32F);
+                float[] dstPoints = new float[] { 0.0f, 0.0f, w, 0.0f, 0.0f, h, w, h };
+                dstPointMat.put(0, 0, dstPoints);
+
+                Size s = new Size();
+                s.width = w;
+                s.height = h;
+                Debug.Log($"({x1},{y1})({x2},{y2}) {rgbMat.width()}, {rgbMat.height()}, {rgbMat.size()}");
+                rMat = Imgproc.getPerspectiveTransform(srcPointMat, dstPointMat);
+                Imgproc.warpPerspective(rgbMat, firstSceneCaptureMat, rMat, s);
+
+                _image.texture = texture;
+                isDetect = true;
             }
 
             firstSceneCaptureTexture = new Texture2D(webCamTexture.width, webCamTexture.height, TextureFormat.RGBA32, false);
@@ -451,8 +475,9 @@ public class OpenCVCtrl : MonoBehaviour
 
         if (rejectedCorners.Count > 0)
         {
-            Aruco.drawDetectedMarkers(rgbMat, rejectedCorners, new Mat(), new Scalar(255, 0, 0));
+            Objdetect.drawDetectedMarkers(rgbMat, rejectedCorners, new Mat(), new Scalar(255, 0, 0));
         }
+
         Utils.matToTexture2D(rgbMat, texture2);
 
         return isDetect;
@@ -469,12 +494,12 @@ public class OpenCVCtrl : MonoBehaviour
         pos = new Vector2(0,0);
 
         //ARマーカーを検出する
-        Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_4X4_50);
+        Dictionary dictionary = Objdetect.getPredefinedDictionary((int)ArUcoDictionary.DICT_4X4_50);
         Mat ids = new Mat();
         List<Mat> corners = new List<Mat>();
         List<Mat> rejectedCorners = new List<Mat>();
         Mat recoveredIdxs = new Mat();
-        DetectorParameters detectorParams = DetectorParameters.create();
+        DetectorParameters detectorParams = new DetectorParameters();
 
         //Mat _rgbaMat = new Mat(webCamTexture.height, webCamTexture.width, CvType.CV_8UC3);
         //rgbMat = new Mat(webCamTexture.height, webCamTexture.width, CvType.CV_8UC3);
@@ -532,13 +557,11 @@ public class OpenCVCtrl : MonoBehaviour
             // detect diamond markers.
             Aruco.detectCharucoDiamond(rgbMat, corners, ids, diamondSquareLength / diamondMarkerLength, diamondCorners, diamondIds, camMatrix, distCoeffs);
 
-            /*
             // draw markers.
-            Aruco.drawDetectedMarkers(rgbMat, corners, ids, new Scalar(0, 255, 0));
+            Objdetect.drawDetectedMarkers(rgbMat, corners, ids, new Scalar(0, 255, 0));
 
             // draw diamond markers.
-            Aruco.drawDetectedDiamonds(rgbMat, diamondCorners, diamondIds, new Scalar(0, 0, 255));
-            */
+            Objdetect.drawDetectedDiamonds(rgbMat, diamondCorners, diamondIds, new Scalar(0, 0, 255));
 
             // estimate pose.
             // if at least one charuco corner detected
@@ -557,7 +580,7 @@ public class OpenCVCtrl : MonoBehaviour
 
         if (rejectedCorners.Count > 0)
         {
-            Aruco.drawDetectedMarkers(rgbMat, rejectedCorners, new Mat(), new Scalar(255, 0, 0));
+            Objdetect.drawDetectedMarkers(rgbMat, rejectedCorners, new Mat(), new Scalar(255, 0, 0));
         }
 
         Utils.matToTexture2D(rgbMat, texture2);
@@ -604,12 +627,12 @@ public class OpenCVCtrl : MonoBehaviour
     void DetectMarkerAndDrawString()
     {
         //ARマーカーを検出する
-        Dictionary dictionary = Aruco.getPredefinedDictionary(Aruco.DICT_4X4_50);
+        Dictionary dictionary = Objdetect.getPredefinedDictionary((int)ArUcoDictionary.DICT_4X4_50);
         Mat ids = new Mat();
         List<Mat> corners = new List<Mat>();
         List<Mat> rejectedCorners = new List<Mat>();
         Mat recoveredIdxs = new Mat();
-        DetectorParameters detectorParams = DetectorParameters.create();
+        DetectorParameters detectorParams = new DetectorParameters();
 
         //Mat _rgbaMat = new Mat(webCamTexture.height, webCamTexture.width, CvType.CV_8UC3);
         //rgbMat = new Mat(webCamTexture.height, webCamTexture.width, CvType.CV_8UC3);
@@ -713,7 +736,7 @@ public class OpenCVCtrl : MonoBehaviour
 
         if (rejectedCorners.Count > 0)
         {
-            Aruco.drawDetectedMarkers(rgbMat, rejectedCorners, new Mat(), new Scalar(255, 0, 0));
+            Objdetect.drawDetectedMarkers(rgbMat, rejectedCorners, new Mat(), new Scalar(255, 0, 0));
         }
 
         Utils.matToTexture2D(rgbMat, texture2);
@@ -738,11 +761,13 @@ public class OpenCVCtrl : MonoBehaviour
                 Utils.matToTexture2D(rgbaMat, texture, colors);
                 if(DetectSceneMarkers())
                 {
-                    _image.enabled = false;
+                    //_image.enabled = false;
+                    Debug.Log("find");
                 }
             }
             else
             {
+                return;
                 Imgproc.warpPerspective(rgbaMat, rgbaMat, rMat, rgbaMat.size(), Imgproc.INTER_LINEAR);
                 Utils.matToTexture2D(rgbaMat, texture, colors);
 
